@@ -583,11 +583,15 @@
                     const charData = processCharacter(imageData, charX, charY, palette);
                     
                     if (bitDepth === 8) {
-                        // 8-bit: fg (8bit) | bg (8bit) | braille (8bit)
-                        buffer.push(charData.fg, charData.bg, charData.braille);
+                        // 8-bit format: 16-bit word (little-endian) + braille byte
+                        // Word format: bg (low 8 bits) | fg (high 8 bits)
+                        const word = charData.bg | (charData.fg << 8);
+                        buffer.push(word & 0xFF, (word >> 8) & 0xFF, charData.braille);
                     } else {
-                        // 4-bit: fg(4bit)|bg(4bit) | braille (8bit)
-                        buffer.push((charData.fg & 0x0F) | ((charData.bg & 0x0F) << 4), charData.braille);
+                        // 4-bit format: 16-bit word (little-endian)
+                        // Word format: bg (low 4 bits) | fg (next 4 bits) | braille (high 8 bits)
+                        const word = charData.bg | (charData.fg << 4) | (charData.braille << 8);
+                        buffer.push(word & 0xFF, (word >> 8) & 0xFF);
                     }
                 }
             }
@@ -617,24 +621,37 @@
                 }
             }
 
-            // Find most common two colors
+            // Find most common two colors (foreground and background)
             const colorCounts = {};
             pixels.forEach(c => colorCounts[c] = (colorCounts[c] || 0) + 1);
             const sorted = Object.entries(colorCounts).sort((a, b) => b[1] - a[1]);
             
-            const fg = sorted[0] ? parseInt(sorted[0][0]) : 15;
-            const bg = sorted[1] ? parseInt(sorted[1][0]) : 15;
+            const fgColor = sorted[0] ? parseInt(sorted[0][0]) : 15;
+            const bgColor = sorted[1] ? parseInt(sorted[1][0]) : 15;
 
-            // Create braille pattern
+            // Create braille pattern based on which pixels match the foreground
+            // Braille dots are numbered:
+            // 0 3
+            // 1 4  
+            // 2 5
+            // 6 7
             let braille = 0;
-            const brailleBits = [0, 3, 1, 4, 2, 5, 6, 7]; // Braille dot order
+            const pixelOrder = [
+                [0, 0], [0, 1], [0, 2], [0, 3],  // Left column: dots 0,1,2,6
+                [1, 0], [1, 1], [1, 2], [1, 3]   // Right column: dots 3,4,5,7
+            ];
+            
+            const brailleBits = [0, 1, 2, 6, 3, 4, 5, 7]; // Bit positions for each pixel
+            
             for (let i = 0; i < 8; i++) {
-                if (pixels[i] === fg) {
+                const [dx, dy] = pixelOrder[i];
+                const pixelIndex = dy * 2 + dx;
+                if (pixels[pixelIndex] === fgColor) {
                     braille |= (1 << brailleBits[i]);
                 }
             }
 
-            return { fg, bg, braille };
+            return { fg: fgColor, bg: bgColor, braille: braille };
         }
 
         function showPreview(imageData) {
