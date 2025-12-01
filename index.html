@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CTIF Converter - OpenComputers Image Tool</title>
+    <title>CTIF Converter - OpenComputers Image Tool V3</title>
     <link href="https://fonts.googleapis.com/css2?family=VT323&family=Share+Tech+Mono&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -460,6 +460,13 @@
             // Generate custom palette from the image
             const palette = generateImagePalette(imageData, 16);
             addLog(`Generated custom 16-color palette from image`, 'success');
+            
+            // Debug: show first few palette colors
+            const palettePreview = palette.slice(0, 4).map(c => {
+                const rgb = hexToRgb(c);
+                return `#${rgb[0].toString(16).padStart(2,'0')}${rgb[1].toString(16).padStart(2,'0')}${rgb[2].toString(16).padStart(2,'0')}`;
+            }).join(', ');
+            addLog(`Palette colors: ${palettePreview}...`, 'info');
 
             // Apply dithering
             if (dither === 'floyd') {
@@ -505,10 +512,16 @@
             }));
 
             // Use median cut algorithm
-            const palette = medianCutPalette(colors, maxColors);
+            let palette = medianCutPalette(colors, maxColors);
+            
+            // Ensure we have exactly 16 colors by padding with grayscale if needed
+            while (palette.length < 16) {
+                const gray = Math.floor(palette.length * 255 / 15);
+                palette.push([gray, gray, gray]);
+            }
             
             // Convert to hex values
-            return palette.map(rgb => rgbToHex(rgb[0], rgb[1], rgb[2]));
+            return palette.slice(0, 16).map(rgb => rgbToHex(rgb[0], rgb[1], rgb[2]));
         }
 
         function medianCutPalette(colors, maxColors) {
