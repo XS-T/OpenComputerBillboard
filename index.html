@@ -297,7 +297,7 @@
                         <label for="bitDepth">Bit Depth</label>
                         <select id="bitDepth">
                             <option value="4">4-bit (16 colors)</option>
-                            <option value="8" selected>8-bit (256 colors)</option>
+                            <option value="8" selected>8-bit (uses 16 color palette)</option>
                         </select>
                     </div>
 
@@ -471,7 +471,8 @@
         });
 
         function generatePalette(imageData, bitDepth) {
-            const maxColors = bitDepth === 4 ? 16 : 256;
+            // CTIF only supports up to 16 custom palette colors
+            const maxColors = 16;
             const pixels = [];
             
             // Sample pixels
