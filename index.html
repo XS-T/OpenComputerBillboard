@@ -306,6 +306,7 @@
                         <select id="dither">
                             <option value="none">None</option>
                             <option value="floyd" selected>Floyd-Steinberg</option>
+                            <option value="ordered">Ordered (Bayer)</option>
                         </select>
                     </div>
                 </div>
@@ -472,6 +473,9 @@
             if (dither === 'floyd') {
                 applyFloydSteinberg(imageData, palette);
                 addLog('Applied Floyd-Steinberg dithering', 'success');
+            } else if (dither === 'ordered') {
+                applyOrderedDither(imageData, palette);
+                addLog('Applied ordered (Bayer) dithering', 'success');
             }
 
             // Create CTIF
@@ -494,27 +498,20 @@
         }
 
         function generateImagePalette(imageData, maxColors) {
-            // Collect all unique colors from the image
-            const colorMap = new Map();
+            // Use octree color quantization for better quality
+            const octree = new ColorOctree(8); // 8 levels deep
             
             for (let i = 0; i < imageData.data.length; i += 4) {
                 const r = imageData.data[i];
                 const g = imageData.data[i + 1];
                 const b = imageData.data[i + 2];
-                const hex = rgbToHex(r, g, b);
-                colorMap.set(hex, (colorMap.get(hex) || 0) + 1);
+                octree.addColor(r, g, b);
             }
-
-            // Convert to array of [color, count]
-            const colors = Array.from(colorMap.entries()).map(([hex, count]) => ({
-                color: hexToRgb(hex),
-                count: count
-            }));
-
-            // Use median cut algorithm
-            let palette = medianCutPalette(colors, maxColors);
             
-            // Ensure we have exactly 16 colors by padding with grayscale if needed
+            // Get palette from octree
+            let palette = octree.getPalette(maxColors);
+            
+            // Ensure we have exactly 16 colors
             while (palette.length < 16) {
                 const gray = Math.floor(palette.length * 255 / 15);
                 palette.push([gray, gray, gray]);
@@ -522,6 +519,116 @@
             
             // Convert to hex values
             return palette.slice(0, 16).map(rgb => rgbToHex(rgb[0], rgb[1], rgb[2]));
+        }
+
+        // Octree color quantization for better palette generation
+        class ColorOctree {
+            constructor(maxLevel) {
+                this.maxLevel = maxLevel;
+                this.root = new OctreeNode(0, this);
+                this.leafNodes = [];
+            }
+
+            addColor(r, g, b) {
+                this.root.addColor(r, g, b, 0, this);
+            }
+
+            getPalette(colorCount) {
+                // Reduce to desired number of colors
+                while (this.leafNodes.length > colorCount) {
+                    // Find node with smallest pixel count
+                    let minNode = null;
+                    let minCount = Infinity;
+                    
+                    for (const node of this.leafNodes) {
+                        if (node.pixelCount < minCount) {
+                            minCount = node.pixelCount;
+                            minNode = node;
+                        }
+                    }
+                    
+                    if (minNode && minNode.parent) {
+                        minNode.parent.merge();
+                    } else {
+                        break;
+                    }
+                }
+
+                // Get colors from remaining leaf nodes
+                const palette = [];
+                for (const node of this.leafNodes) {
+                    if (node.pixelCount > 0) {
+                        palette.push([
+                            Math.round(node.red / node.pixelCount),
+                            Math.round(node.green / node.pixelCount),
+                            Math.round(node.blue / node.pixelCount)
+                        ]);
+                    }
+                }
+                
+                return palette;
+            }
+        }
+
+        class OctreeNode {
+            constructor(level, octree) {
+                this.level = level;
+                this.pixelCount = 0;
+                this.red = 0;
+                this.green = 0;
+                this.blue = 0;
+                this.children = new Array(8).fill(null);
+                this.parent = null;
+                
+                if (level === octree.maxLevel) {
+                    octree.leafNodes.push(this);
+                }
+            }
+
+            addColor(r, g, b, level, octree) {
+                if (level === octree.maxLevel) {
+                    this.pixelCount++;
+                    this.red += r;
+                    this.green += g;
+                    this.blue += b;
+                } else {
+                    const index = this.getColorIndex(r, g, b, level);
+                    
+                    if (!this.children[index]) {
+                        this.children[index] = new OctreeNode(level + 1, octree);
+                        this.children[index].parent = this;
+                    }
+                    
+                    this.children[index].addColor(r, g, b, level + 1, octree);
+                }
+            }
+
+            getColorIndex(r, g, b, level) {
+                const shift = 7 - level;
+                return ((r >> shift) & 1) << 2 |
+                       ((g >> shift) & 1) << 1 |
+                       ((b >> shift) & 1);
+            }
+
+            merge() {
+                // Merge all children into this node
+                for (const child of this.children) {
+                    if (child) {
+                        this.pixelCount += child.pixelCount;
+                        this.red += child.red;
+                        this.green += child.green;
+                        this.blue += child.blue;
+                        
+                        // Remove child from leaf nodes
+                        const index = child.octree.leafNodes.indexOf(child);
+                        if (index > -1) {
+                            child.octree.leafNodes.splice(index, 1);
+                        }
+                    }
+                }
+                
+                this.children.fill(null);
+            }
         }
 
         function medianCutPalette(colors, maxColors) {
@@ -606,47 +713,83 @@
             return nearest;
         }
 
-        function applyFloydSteinberg(imageData, palette) {
+        function applyOrderedDither(imageData, palette) {
+            // 8x8 Bayer matrix
+            const bayerMatrix = [
+                [ 0, 32,  8, 40,  2, 34, 10, 42],
+                [48, 16, 56, 24, 50, 18, 58, 26],
+                [12, 44,  4, 36, 14, 46,  6, 38],
+                [60, 28, 52, 20, 62, 30, 54, 22],
+                [ 3, 35, 11, 43,  1, 33,  9, 41],
+                [51, 19, 59, 27, 49, 17, 57, 25],
+                [15, 47,  7, 39, 13, 45,  5, 37],
+                [63, 31, 55, 23, 61, 29, 53, 21]
+            ];
+
             const width = imageData.width;
             const height = imageData.height;
+            const data = imageData.data;
 
             for (let y = 0; y < height; y++) {
                 for (let x = 0; x < width; x++) {
                     const i = (y * width + x) * 4;
-                    const oldPixel = [
-                        imageData.data[i],
-                        imageData.data[i + 1],
-                        imageData.data[i + 2]
-                    ];
-
-                    const colorIndex = findNearestColor(oldPixel, palette);
+                    
+                    // Get threshold from Bayer matrix
+                    const threshold = (bayerMatrix[y % 8][x % 8] / 64) - 0.5;
+                    
+                    // Add threshold to each channel
+                    const r = Math.max(0, Math.min(255, data[i] + threshold * 64));
+                    const g = Math.max(0, Math.min(255, data[i + 1] + threshold * 64));
+                    const b = Math.max(0, Math.min(255, data[i + 2] + threshold * 64));
+                    
+                    // Find nearest color
+                    const colorIndex = findNearestColor([r, g, b], palette);
                     const newPixel = hexToRgb(palette[colorIndex]);
-
-                    imageData.data[i] = newPixel[0];
-                    imageData.data[i + 1] = newPixel[1];
-                    imageData.data[i + 2] = newPixel[2];
-
-                    const error = [
-                        oldPixel[0] - newPixel[0],
-                        oldPixel[1] - newPixel[1],
-                        oldPixel[2] - newPixel[2]
-                    ];
-
-                    distributeError(imageData, x + 1, y, width, height, error, 7/16);
-                    distributeError(imageData, x - 1, y + 1, width, height, error, 3/16);
-                    distributeError(imageData, x, y + 1, width, height, error, 5/16);
-                    distributeError(imageData, x + 1, y + 1, width, height, error, 1/16);
+                    
+                    data[i] = newPixel[0];
+                    data[i + 1] = newPixel[1];
+                    data[i + 2] = newPixel[2];
                 }
             }
         }
 
-        function distributeError(imageData, x, y, width, height, error, factor) {
+        function applyFloydSteinberg(imageData, palette) {
+            const width = imageData.width;
+            const height = imageData.height;
+            const data = imageData.data;
+
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const i = (y * width + x) * 4;
+                    const oldPixel = [data[i], data[i + 1], data[i + 2]];
+
+                    const colorIndex = findNearestColor(oldPixel, palette);
+                    const newPixel = hexToRgb(palette[colorIndex]);
+
+                    data[i] = newPixel[0];
+                    data[i + 1] = newPixel[1];
+                    data[i + 2] = newPixel[2];
+
+                    const errorR = oldPixel[0] - newPixel[0];
+                    const errorG = oldPixel[1] - newPixel[1];
+                    const errorB = oldPixel[2] - newPixel[2];
+
+                    // Distribute error to neighboring pixels
+                    distributeErrorRGB(data, width, height, x + 1, y, errorR, errorG, errorB, 7/16);
+                    distributeErrorRGB(data, width, height, x - 1, y + 1, errorR, errorG, errorB, 3/16);
+                    distributeErrorRGB(data, width, height, x, y + 1, errorR, errorG, errorB, 5/16);
+                    distributeErrorRGB(data, width, height, x + 1, y + 1, errorR, errorG, errorB, 1/16);
+                }
+            }
+        }
+
+        function distributeErrorRGB(data, width, height, x, y, errorR, errorG, errorB, factor) {
             if (x < 0 || x >= width || y < 0 || y >= height) return;
             
             const i = (y * width + x) * 4;
-            imageData.data[i] = Math.max(0, Math.min(255, imageData.data[i] + error[0] * factor));
-            imageData.data[i + 1] = Math.max(0, Math.min(255, imageData.data[i + 1] + error[1] * factor));
-            imageData.data[i + 2] = Math.max(0, Math.min(255, imageData.data[i + 2] + error[2] * factor));
+            data[i] = Math.max(0, Math.min(255, data[i] + errorR * factor));
+            data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + errorG * factor));
+            data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + errorB * factor));
         }
 
         function createCTIF(imageData, width, height, palette, bitDepth) {
