@@ -457,9 +457,9 @@
 
             addLog(`Resized to ${pixelWidth}x${pixelHeight}px`, 'success');
 
-            // Use OC palette
-            const palette = OC_PALETTE.slice(0, 16);
-            addLog(`Using OpenComputers standard 16-color palette`, 'success');
+            // Generate custom palette from the image
+            const palette = generateImagePalette(imageData, 16);
+            addLog(`Generated custom 16-color palette from image`, 'success');
 
             // Apply dithering
             if (dither === 'floyd') {
@@ -484,6 +484,93 @@
 
         function hexToRgb(hex) {
             return [(hex >> 16) & 0xFF, (hex >> 8) & 0xFF, hex & 0xFF];
+        }
+
+        function generateImagePalette(imageData, maxColors) {
+            // Collect all unique colors from the image
+            const colorMap = new Map();
+            
+            for (let i = 0; i < imageData.data.length; i += 4) {
+                const r = imageData.data[i];
+                const g = imageData.data[i + 1];
+                const b = imageData.data[i + 2];
+                const hex = rgbToHex(r, g, b);
+                colorMap.set(hex, (colorMap.get(hex) || 0) + 1);
+            }
+
+            // Convert to array of [color, count]
+            const colors = Array.from(colorMap.entries()).map(([hex, count]) => ({
+                color: hexToRgb(hex),
+                count: count
+            }));
+
+            // Use median cut algorithm
+            const palette = medianCutPalette(colors, maxColors);
+            
+            // Convert to hex values
+            return palette.map(rgb => rgbToHex(rgb[0], rgb[1], rgb[2]));
+        }
+
+        function medianCutPalette(colors, maxColors) {
+            if (colors.length <= maxColors) {
+                return colors.map(c => c.color);
+            }
+
+            // Start with all colors in one bucket
+            let buckets = [colors];
+
+            while (buckets.length < maxColors) {
+                // Find bucket with greatest range
+                let maxRange = -1;
+                let maxBucketIndex = 0;
+                let maxChannel = 0;
+
+                for (let i = 0; i < buckets.length; i++) {
+                    const bucket = buckets[i];
+                    if (bucket.length <= 1) continue;
+
+                    // Find range for each channel
+                    for (let ch = 0; ch < 3; ch++) {
+                        const values = bucket.map(c => c.color[ch]);
+                        const range = Math.max(...values) - Math.min(...values);
+                        if (range > maxRange) {
+                            maxRange = range;
+                            maxBucketIndex = i;
+                            maxChannel = ch;
+                        }
+                    }
+                }
+
+                if (maxRange === -1) break;
+
+                // Split the bucket
+                const bucketToSplit = buckets[maxBucketIndex];
+                bucketToSplit.sort((a, b) => a.color[maxChannel] - b.color[maxChannel]);
+                
+                const mid = Math.floor(bucketToSplit.length / 2);
+                const bucket1 = bucketToSplit.slice(0, mid);
+                const bucket2 = bucketToSplit.slice(mid);
+
+                buckets.splice(maxBucketIndex, 1, bucket1, bucket2);
+            }
+
+            // Get average color from each bucket
+            return buckets.map(bucket => {
+                let totalR = 0, totalG = 0, totalB = 0, totalCount = 0;
+                
+                for (const item of bucket) {
+                    totalR += item.color[0] * item.count;
+                    totalG += item.color[1] * item.count;
+                    totalB += item.color[2] * item.count;
+                    totalCount += item.count;
+                }
+
+                return [
+                    Math.round(totalR / totalCount),
+                    Math.round(totalG / totalCount),
+                    Math.round(totalB / totalCount)
+                ];
+            });
         }
 
         function findNearestColor(pixel, palette) {
