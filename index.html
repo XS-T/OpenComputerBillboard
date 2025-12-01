@@ -661,11 +661,18 @@
 
             for (let i = 0; i < 16; i++) {
                 const rgb = hexToRgb(palette[i]);
-                // Store as little-endian 16-bit RGB565-ish, then extra byte
                 const r = rgb[0];
                 const g = rgb[1]; 
                 const b = rgb[2];
-                buffer.push(g, b, r); // Note: stored as G, B, R based on viewer code
+                // Viewer reads: w = r16(file); data[3][p] = w | (r8(file) << 16)
+                // So it reads 2 bytes as 16-bit little-endian word, then 1 byte
+                // The word becomes the low 16 bits, the byte becomes bits 16-23
+                // We need to pack R and G into the 16-bit word, and B as the third byte
+                // Store as: low_byte, high_byte, third_byte
+                // To get: color = (high_byte << 8 | low_byte) | (third_byte << 16)
+                // We want: color = (R << 16) | (G << 8) | B
+                // So: third_byte = R, high_byte = G, low_byte = B
+                buffer.push(b, g, r);
             }
 
             // Image data - process each 2x4 character block
