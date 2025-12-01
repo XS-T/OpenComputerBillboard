@@ -268,7 +268,7 @@
     <div class="container">
         <header class="header">
             <h1>CTIF CONVERTER<span class="cursor">_</span></h1>
-            <p class="subtitle">OpenComputers Image Format Tool</p>
+            <p class="subtitle">OpenComputers Image Format Tool v0.3</p>
         </header>
 
         <div class="main-content">
@@ -296,8 +296,8 @@
                     <div class="control-group">
                         <label for="bitDepth">Bit Depth</label>
                         <select id="bitDepth">
-                            <option value="4">4-bit (16 colors)</option>
-                            <option value="8" selected>8-bit (uses 16 color palette)</option>
+                            <option value="4">4-bit (Tier 1 - 16 colors)</option>
+                            <option value="8" selected>8-bit (Tier 2/3 - 16 color palette)</option>
                         </select>
                     </div>
 
@@ -327,18 +327,19 @@
             <h2 class="panel-title">&gt; SYSTEM LOG</h2>
             <div class="log" id="log">
                 <div class="log-entry success">[SYSTEM] CTIF Converter initialized</div>
+                <div class="log-entry">[ INFO ] Based on ChenThread/ctif format specification</div>
                 <div class="log-entry">[ INFO ] Waiting for image input...</div>
             </div>
         </div>
 
         <footer class="footer">
             <p>CTIF Format for <a href="https://ocdoc.cil.li/" target="_blank">OpenComputers</a></p>
-            <p>Based on original CTIF specification</p>
+            <p>Based on <a href="https://github.com/ChenThread/ctif" target="_blank">ChenThread/ctif</a> specification</p>
         </footer>
     </div>
 
     <script>
-        // CTIF Converter Logic
+        // CTIF Converter Logic - Based on ChenThread/ctif
         const uploadZone = document.getElementById('uploadZone');
         const fileInput = document.getElementById('fileInput');
         const convertBtn = document.getElementById('convertBtn');
@@ -351,10 +352,17 @@
         let currentImage = null;
         let ctifData = null;
 
+        // OpenComputers standard palette (from the original ctif)
+        const OC_PALETTE = [
+            0xFFFFFF, 0xFFCC33, 0xCC66CC, 0x6699FF, 0xFFFF33, 0x33CC33, 0xFF6699, 0x333333,
+            0xCCCCCC, 0x336699, 0x9933CC, 0x333399, 0x663300, 0x336600, 0xFF3333, 0x000000
+        ];
+
         function addLog(message, type = 'info') {
             const entry = document.createElement('div');
             entry.className = `log-entry ${type}`;
-            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            const timestamp = new Date().toLocaleTimeString();
+            entry.textContent = `[${timestamp}] ${message}`;
             log.appendChild(entry);
             log.scrollTop = log.scrollHeight;
         }
@@ -391,7 +399,7 @@
                 return;
             }
 
-            addLog(`Loading image: ${file.name}`, 'success');
+            addLog(`Loading: ${file.name}`, 'success');
             const reader = new FileReader();
             
             reader.onload = (e) => {
@@ -399,7 +407,7 @@
                 img.onload = () => {
                     currentImage = img;
                     convertBtn.disabled = false;
-                    addLog(`Image loaded: ${img.width}x${img.height}px`, 'success');
+                    addLog(`Loaded: ${img.width}x${img.height}px`, 'success');
                     updateInfo();
                 };
                 img.src = e.target.result;
@@ -414,7 +422,8 @@
                 const height = parseInt(document.getElementById('height').value);
                 infoBox.innerHTML = `
                     <p>⚡ Source: ${currentImage.width}x${currentImage.height}px</p>
-                    <p>⚡ Target: ${width}x${height} characters (${width*2}x${height*4}px)</p>
+                    <p>⚡ Target: ${width}x${height} chars (${width*2}x${height*4}px)</p>
+                    <p>⚡ CTIF Platform: OpenComputers (ID:1)</p>
                 `;
             }
         }
@@ -426,97 +435,55 @@
         convertBtn.addEventListener('click', () => {
             if (!currentImage) return;
 
-            addLog('Starting conversion...', 'warning');
+            addLog('Starting CTIF conversion...', 'warning');
             
             const width = parseInt(document.getElementById('width').value);
             const height = parseInt(document.getElementById('height').value);
             const bitDepth = parseInt(document.getElementById('bitDepth').value);
             const dither = document.getElementById('dither').value;
 
-            // Convert image
             const pixelWidth = width * 2;
             const pixelHeight = height * 4;
 
-            // Create temporary canvas for processing
+            // Create canvas for processing
             const tempCanvas = document.createElement('canvas');
             tempCanvas.width = pixelWidth;
             tempCanvas.height = pixelHeight;
             const tempCtx = tempCanvas.getContext('2d');
 
-            // Draw and scale image
+            // Draw and scale
             tempCtx.drawImage(currentImage, 0, 0, pixelWidth, pixelHeight);
-            const imageData = tempCtx.getImageData(0, 0, pixelWidth, pixelHeight);
+            let imageData = tempCtx.getImageData(0, 0, pixelWidth, pixelHeight);
 
             addLog(`Resized to ${pixelWidth}x${pixelHeight}px`, 'success');
 
-            // Quantize colors
-            const palette = generatePalette(imageData, bitDepth);
-            addLog(`Generated ${palette.length}-color palette`, 'success');
+            // Use OC palette
+            const palette = OC_PALETTE.slice(0, 16);
+            addLog(`Using OpenComputers standard 16-color palette`, 'success');
 
-            // Apply dithering if selected
+            // Apply dithering
             if (dither === 'floyd') {
                 applyFloydSteinberg(imageData, palette);
                 addLog('Applied Floyd-Steinberg dithering', 'success');
             }
 
-            // Convert to CTIF format
+            // Create CTIF
             ctifData = createCTIF(imageData, width, height, palette, bitDepth);
-            addLog(`Generated CTIF file (${ctifData.length} bytes)`, 'success');
+            addLog(`Generated CTIF: ${ctifData.length} bytes`, 'success');
 
-            // Show preview
-            showPreview(imageData, width, height);
+            // Preview
+            showPreview(imageData);
             downloadBtn.disabled = false;
             
             addLog('Conversion complete!', 'success');
         });
 
-        function generatePalette(imageData, bitDepth) {
-            // CTIF only supports up to 16 custom palette colors
-            const maxColors = 16;
-            const pixels = [];
-            
-            // Sample pixels
-            for (let i = 0; i < imageData.data.length; i += 4) {
-                pixels.push([
-                    imageData.data[i],
-                    imageData.data[i + 1],
-                    imageData.data[i + 2]
-                ]);
-            }
-
-            // Simple median cut palette generation
-            return medianCut(pixels, maxColors);
+        function rgbToHex(r, g, b) {
+            return (r << 16) | (g << 8) | b;
         }
 
-        function medianCut(pixels, maxColors) {
-            if (pixels.length === 0 || maxColors === 1) {
-                const avg = pixels.reduce((acc, p) => [
-                    acc[0] + p[0],
-                    acc[1] + p[1],
-                    acc[2] + p[2]
-                ], [0, 0, 0]);
-                return [[
-                    Math.floor(avg[0] / pixels.length),
-                    Math.floor(avg[1] / pixels.length),
-                    Math.floor(avg[2] / pixels.length)
-                ]];
-            }
-
-            // Find channel with greatest range
-            const ranges = [0, 1, 2].map(channel => {
-                const values = pixels.map(p => p[channel]);
-                return Math.max(...values) - Math.min(...values);
-            });
-            const splitChannel = ranges.indexOf(Math.max(...ranges));
-
-            // Sort and split
-            pixels.sort((a, b) => a[splitChannel] - b[splitChannel]);
-            const mid = Math.floor(pixels.length / 2);
-
-            return [
-                ...medianCut(pixels.slice(0, mid), Math.floor(maxColors / 2)),
-                ...medianCut(pixels.slice(mid), Math.ceil(maxColors / 2))
-            ];
+        function hexToRgb(hex) {
+            return [(hex >> 16) & 0xFF, (hex >> 8) & 0xFF, hex & 0xFF];
         }
 
         function findNearestColor(pixel, palette) {
@@ -524,10 +491,11 @@
             let nearest = 0;
 
             for (let i = 0; i < palette.length; i++) {
+                const rgb = hexToRgb(palette[i]);
                 const dist = Math.sqrt(
-                    Math.pow(pixel[0] - palette[i][0], 2) +
-                    Math.pow(pixel[1] - palette[i][1], 2) +
-                    Math.pow(pixel[2] - palette[i][2], 2)
+                    Math.pow(pixel[0] - rgb[0], 2) +
+                    Math.pow(pixel[1] - rgb[1], 2) +
+                    Math.pow(pixel[2] - rgb[2], 2)
                 );
                 if (dist < minDist) {
                     minDist = dist;
@@ -552,7 +520,7 @@
                     ];
 
                     const colorIndex = findNearestColor(oldPixel, palette);
-                    const newPixel = palette[colorIndex];
+                    const newPixel = hexToRgb(palette[colorIndex]);
 
                     imageData.data[i] = newPixel[0];
                     imageData.data[i + 1] = newPixel[1];
@@ -564,7 +532,6 @@
                         oldPixel[2] - newPixel[2]
                     ];
 
-                    // Distribute error
                     distributeError(imageData, x + 1, y, width, height, error, 7/16);
                     distributeError(imageData, x - 1, y + 1, width, height, error, 3/16);
                     distributeError(imageData, x, y + 1, width, height, error, 5/16);
@@ -585,41 +552,42 @@
         function createCTIF(imageData, width, height, palette, bitDepth) {
             const buffer = [];
 
-            // Header
+            // CTIF Header
             buffer.push(67, 84, 73, 70); // "CTIF"
-            buffer.push(1); // Version
+            buffer.push(1); // Header version
             buffer.push(0); // Platform variant
-            buffer.push(1, 0); // Platform ID (OpenComputers = 1)
+            buffer.push(1, 0); // Platform ID: OpenComputers = 1
 
-            // Dimensions
+            // Dimensions (in characters)
             buffer.push(width & 0xFF, (width >> 8) & 0xFF);
             buffer.push(height & 0xFF, (height >> 8) & 0xFF);
 
-            // Character size (2x4 pixels)
+            // Character size: 2x4 pixels
             buffer.push(2, 4);
 
             // Bit depth
             buffer.push(bitDepth);
 
-            // Palette
+            // Custom palette (max 16 colors for OC)
             buffer.push(3); // Palette entry size (RGB)
-            buffer.push(palette.length & 0xFF, (palette.length >> 8) & 0xFF);
+            buffer.push(16, 0); // 16 colors
 
-            for (const color of palette) {
-                buffer.push(color[0], color[1], color[2]);
+            for (let i = 0; i < 16; i++) {
+                const rgb = hexToRgb(palette[i]);
+                buffer.push(rgb[0], rgb[1], rgb[2]);
             }
 
-            // Image data (simplified - just index values)
-            const pixelData = imageData.data;
-            for (let y = 0; y < height; y++) {
-                for (let x = 0; x < width; x++) {
-                    // Get 2x4 pixel block
-                    const charData = getCharacterData(imageData, x, y, palette);
+            // Image data - process each 2x4 character block
+            for (let charY = 0; charY < height; charY++) {
+                for (let charX = 0; charX < width; charX++) {
+                    const charData = processCharacter(imageData, charX, charY, palette);
                     
                     if (bitDepth === 8) {
-                        buffer.push(charData & 0xFF, (charData >> 8) & 0xFF, (charData >> 16) & 0xFF);
+                        // 8-bit: fg (8bit) | bg (8bit) | braille (8bit)
+                        buffer.push(charData.fg, charData.bg, charData.braille);
                     } else {
-                        buffer.push(charData & 0xFF, (charData >> 8) & 0xFF);
+                        // 4-bit: fg(4bit)|bg(4bit) | braille (8bit)
+                        buffer.push((charData.fg & 0x0F) | ((charData.bg & 0x0F) << 4), charData.braille);
                     }
                 }
             }
@@ -627,31 +595,49 @@
             return new Uint8Array(buffer);
         }
 
-        function getCharacterData(imageData, charX, charY, palette) {
-            // Simplified: just get average color for the character cell
+        function processCharacter(imageData, charX, charY, palette) {
             const pixelX = charX * 2;
             const pixelY = charY * 4;
+            const width = imageData.width;
             
-            let r = 0, g = 0, b = 0, count = 0;
-            
-            for (let dy = 0; dy < 4 && pixelY + dy < imageData.height; dy++) {
-                for (let dx = 0; dx < 2 && pixelX + dx < imageData.width; dx++) {
-                    const i = ((pixelY + dy) * imageData.width + (pixelX + dx)) * 4;
-                    r += imageData.data[i];
-                    g += imageData.data[i + 1];
-                    b += imageData.data[i + 2];
-                    count++;
+            // Get colors in this 2x4 block
+            const pixels = [];
+            for (let dy = 0; dy < 4; dy++) {
+                for (let dx = 0; dx < 2; dx++) {
+                    const px = pixelX + dx;
+                    const py = pixelY + dy;
+                    if (px < width && py < imageData.height) {
+                        const i = (py * width + px) * 4;
+                        const color = rgbToHex(imageData.data[i], imageData.data[i+1], imageData.data[i+2]);
+                        const colorIndex = palette.indexOf(color);
+                        pixels.push(colorIndex !== -1 ? colorIndex : findNearestColor([imageData.data[i], imageData.data[i+1], imageData.data[i+2]], palette));
+                    } else {
+                        pixels.push(15); // Black for out of bounds
+                    }
                 }
             }
+
+            // Find most common two colors
+            const colorCounts = {};
+            pixels.forEach(c => colorCounts[c] = (colorCounts[c] || 0) + 1);
+            const sorted = Object.entries(colorCounts).sort((a, b) => b[1] - a[1]);
             
-            const avgColor = [r / count, g / count, b / count];
-            const fgIndex = findNearestColor(avgColor, palette);
-            
-            // Simplified character data (just foreground color)
-            return fgIndex | (0 << 8) | (255 << 16); // FG | BG | braille pattern
+            const fg = sorted[0] ? parseInt(sorted[0][0]) : 15;
+            const bg = sorted[1] ? parseInt(sorted[1][0]) : 15;
+
+            // Create braille pattern
+            let braille = 0;
+            const brailleBits = [0, 3, 1, 4, 2, 5, 6, 7]; // Braille dot order
+            for (let i = 0; i < 8; i++) {
+                if (pixels[i] === fg) {
+                    braille |= (1 << brailleBits[i]);
+                }
+            }
+
+            return { fg, bg, braille };
         }
 
-        function showPreview(imageData, width, height) {
+        function showPreview(imageData) {
             previewCanvas.width = imageData.width;
             previewCanvas.height = imageData.height;
             previewCtx.putImageData(imageData, 0, 0);
